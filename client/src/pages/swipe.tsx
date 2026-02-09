@@ -179,25 +179,23 @@ export default function SwipePage() {
   });
 
   useEffect(() => {
-    if (queue.length <= 2 && !isGeneratingRef.current && !generateMutation.isPending) {
+    if (queue.length <= 1 && !isGeneratingRef.current && !generateMutation.isPending && !isLoading) {
       isGeneratingRef.current = true;
       generateMutation.mutate();
     }
-  }, [queue.length]);
+  }, [queue.length, isLoading]);
 
   const handleSwipe = useCallback(
     (direction: "left" | "right") => {
       const currentImage = queue[0];
       if (!currentImage) return;
 
+      setQueue((prev) => prev.slice(1));
+
       swipeMutation.mutate({
         imageId: currentImage.id,
         liked: direction === "right",
       });
-
-      setTimeout(() => {
-        setQueue((prev) => prev.slice(1));
-      }, 300);
     },
     [queue, swipeMutation]
   );
@@ -258,18 +256,18 @@ export default function SwipePage() {
       <div className="flex items-center gap-8">
         <button
           data-testid="button-dislike"
-          className="flex items-center justify-center w-14 h-14 rounded-full border-2 border-destructive/30 text-destructive transition-colors"
+          className="flex items-center justify-center w-14 h-14 rounded-full border-2 border-destructive/30 text-destructive transition-colors disabled:opacity-40"
           onClick={() => handleSwipe("left")}
-          disabled={!visibleCards[0] || swipeMutation.isPending}
+          disabled={!visibleCards[0]}
         >
           <X className="w-7 h-7" />
         </button>
 
         <button
           data-testid="button-like"
-          className="flex items-center justify-center w-14 h-14 rounded-full border-2 border-green-500/30 text-green-500 transition-colors"
+          className="flex items-center justify-center w-14 h-14 rounded-full border-2 border-green-500/30 text-green-500 transition-colors disabled:opacity-40"
           onClick={() => handleSwipe("right")}
-          disabled={!visibleCards[0] || swipeMutation.isPending}
+          disabled={!visibleCards[0]}
         >
           <Heart className="w-7 h-7" />
         </button>
@@ -279,7 +277,12 @@ export default function SwipePage() {
         data-testid="button-generate-more"
         variant="ghost"
         size="sm"
-        onClick={() => generateMutation.mutate()}
+        onClick={() => {
+          if (!isGeneratingRef.current) {
+            isGeneratingRef.current = true;
+            generateMutation.mutate();
+          }
+        }}
         disabled={generateMutation.isPending}
         className="text-muted-foreground"
       >

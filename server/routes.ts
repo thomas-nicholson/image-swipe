@@ -4,16 +4,34 @@ import { storage } from "./storage";
 import { generatePrompts } from "./prompts";
 import { fal } from "@fal-ai/client";
 import { z } from "zod";
+import fs from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
 
 fal.config({
   credentials: process.env.FAL_KEY,
 });
 
-const BATCH_SIZE = 3;
+const BATCH_SIZE = 2;
+const IMAGES_DIR = path.join(process.cwd(), "client", "public", "images");
+
+if (!fs.existsSync(IMAGES_DIR)) {
+  fs.mkdirSync(IMAGES_DIR, { recursive: true });
+}
 
 const swipeSchema = z.object({
   liked: z.boolean(),
 });
+
+async function downloadImage(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to download image: ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const filename = `${randomUUID()}.jpg`;
+  const filepath = path.join(IMAGES_DIR, filename);
+  fs.writeFileSync(filepath, buffer);
+  return `/images/${filename}`;
+}
 
 async function generateImage(prompt: string): Promise<string> {
   const result = await fal.subscribe("fal-ai/flux/schnell", {
@@ -27,7 +45,8 @@ async function generateImage(prompt: string): Promise<string> {
 
   const data = result.data as any;
   if (data?.images?.[0]?.url) {
-    return data.images[0].url;
+    const localUrl = await downloadImage(data.images[0].url);
+    return localUrl;
   }
   throw new Error("No image URL in FAL response");
 }
