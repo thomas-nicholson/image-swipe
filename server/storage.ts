@@ -1,38 +1,61 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
+import { eq, isNull, desc } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+import { images, type InsertImage, type Image } from "@shared/schema";
 
-// modify the interface with any CRUD methods
-// you might need
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool);
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  createImage(image: InsertImage): Promise<Image>;
+  getPendingImages(): Promise<Image[]>;
+  getLikedImages(): Promise<Image[]>;
+  swipeImage(id: string, liked: boolean): Promise<Image | undefined>;
+  getStats(): Promise<{ liked: number; disliked: number; total: number }>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
+export class DatabaseStorage implements IStorage {
+  async createImage(image: InsertImage): Promise<Image> {
+    const [result] = await db.insert(images).values(image).returning();
+    return result;
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async getPendingImages(): Promise<Image[]> {
+    return db.select().from(images).where(isNull(images.liked)).orderBy(images.createdAt);
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+  async getLikedImages(): Promise<Image[]> {
+    return db.select().from(images).where(eq(images.liked, true)).orderBy(desc(images.createdAt));
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async swipeImage(id: string, liked: boolean): Promise<Image | undefined> {
+    const [result] = await db
+      .update(images)
+      .set({ liked })
+      .where(eq(images.id, id))
+      .returning();
+    return result;
+  }
+
+  async getStats(): Promise<{ liked: number; disliked: number; total: number }> {
+    const allSwiped = await db
+      .select()
+      .from(images)
+      .where(eq(images.liked, true))
+      .then((r) => r.length);
+
+    const disliked = await db
+      .select()
+      .from(images)
+      .where(eq(images.liked, false))
+      .then((r) => r.length);
+
+    return {
+      liked: allSwiped,
+      disliked,
+      total: allSwiped + disliked,
+    };
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
