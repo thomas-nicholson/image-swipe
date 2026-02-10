@@ -12,6 +12,7 @@ export interface IStorage {
   getLikedImages(): Promise<Image[]>;
   swipeImage(id: string, liked: boolean): Promise<Image | undefined>;
   getStats(): Promise<{ liked: number; disliked: number; total: number }>;
+  getTotalImageCount(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -55,6 +56,11 @@ export class DatabaseStorage implements IStorage {
       disliked,
       total: allSwiped + disliked,
     };
+  }
+
+  async getTotalImageCount(): Promise<number> {
+    const all = await db.select().from(images);
+    return all.length;
   }
 }
 

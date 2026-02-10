@@ -4,33 +4,51 @@ import { storage } from "./storage";
 import { generatePrompts } from "./prompts";
 import { fal } from "@fal-ai/client";
 import { z } from "zod";
-import fs from "fs";
-import path from "path";
 import { randomUUID } from "crypto";
+import { objectStorageClient, ObjectStorageService } from "./replit_integrations/object_storage";
+import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 
 fal.config({
   credentials: process.env.FAL_KEY,
 });
 
 const BATCH_SIZE = 2;
-const IMAGES_DIR = path.join(process.cwd(), "client", "public", "images");
-
-if (!fs.existsSync(IMAGES_DIR)) {
-  fs.mkdirSync(IMAGES_DIR, { recursive: true });
-}
+const MAX_IMAGES = 50;
 
 const swipeSchema = z.object({
   liked: z.boolean(),
 });
 
-async function downloadImage(url: string): Promise<string> {
+const objectStorageService = new ObjectStorageService();
+
+async function uploadImageToStorage(imageBuffer: Buffer, filename: string): Promise<string> {
+  let privateDir = objectStorageService.getPrivateObjectDir();
+  if (!privateDir.startsWith("/")) {
+    privateDir = `/${privateDir}`;
+  }
+  const fullPath = `${privateDir}/uploads/${filename}`;
+
+  const parts = fullPath.split("/").filter(Boolean);
+  const bucketName = parts[0];
+  const objectName = parts.slice(1).join("/");
+
+  const bucket = objectStorageClient.bucket(bucketName);
+  const file = bucket.file(objectName);
+
+  await file.save(imageBuffer, {
+    contentType: "image/jpeg",
+    resumable: false,
+  });
+
+  return `/objects/uploads/${filename}`;
+}
+
+async function downloadAndStoreImage(url: string): Promise<string> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to download image: ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
   const filename = `${randomUUID()}.jpg`;
-  const filepath = path.join(IMAGES_DIR, filename);
-  fs.writeFileSync(filepath, buffer);
-  return `/images/${filename}`;
+  return uploadImageToStorage(buffer, filename);
 }
 
 async function generateImage(prompt: string): Promise<string> {
@@ -45,8 +63,8 @@ async function generateImage(prompt: string): Promise<string> {
 
   const data = result.data as any;
   if (data?.images?.[0]?.url) {
-    const localUrl = await downloadImage(data.images[0].url);
-    return localUrl;
+    const storedUrl = await downloadAndStoreImage(data.images[0].url);
+    return storedUrl;
   }
   throw new Error("No image URL in FAL response");
 }
@@ -55,6 +73,8 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  registerObjectStorageRoutes(app);
 
   app.get("/api/images/pending", async (_req, res) => {
     try {
@@ -83,9 +103,31 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/images/count", async (_req, res) => {
+    try {
+      const count = await storage.getTotalImageCount();
+      res.json({ count, limit: MAX_IMAGES, canGenerate: count < MAX_IMAGES });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/images/generate", async (_req, res) => {
     try {
-      const prompts = generatePrompts(BATCH_SIZE);
+      const currentCount = await storage.getTotalImageCount();
+      if (currentCount >= MAX_IMAGES) {
+        return res.status(403).json({
+          error: "Image generation limit reached",
+          message: `Maximum of ${MAX_IMAGES} images has been reached to conserve API credits.`,
+          count: currentCount,
+          limit: MAX_IMAGES,
+        });
+      }
+
+      const remaining = MAX_IMAGES - currentCount;
+      const batchSize = Math.min(BATCH_SIZE, remaining);
+
+      const prompts = generatePrompts(batchSize);
       const results = await Promise.allSettled(
         prompts.map(async (prompt) => {
           const imageUrl = await generateImage(prompt);

@@ -1,13 +1,19 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { motion, useMotionValue, useTransform, AnimatePresence, PanInfo } from "framer-motion";
-import { Heart, X, Loader2, Sparkles } from "lucide-react";
+import { Heart, X, Loader2, Sparkles, Ban } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Image } from "@shared/schema";
 
 const SWIPE_THRESHOLD = 100;
+
+interface ImageCount {
+  count: number;
+  limit: number;
+  canGenerate: boolean;
+}
 
 function SwipeCard({
   image,
@@ -99,7 +105,33 @@ function SwipeCard({
   );
 }
 
-function EmptyState({ onGenerate, isGenerating }: { onGenerate: () => void; isGenerating: boolean }) {
+function EmptyState({
+  onGenerate,
+  isGenerating,
+  canGenerate,
+  imageCount,
+}: {
+  onGenerate: () => void;
+  isGenerating: boolean;
+  canGenerate: boolean;
+  imageCount?: ImageCount;
+}) {
+  if (!canGenerate) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-6 text-center">
+        <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center">
+          <Ban className="w-9 h-9 text-muted-foreground" />
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold mb-1">All done!</h3>
+          <p className="text-muted-foreground text-sm max-w-[280px]">
+            You've swiped through all {imageCount?.limit ?? 50} images. Check your saved gallery for favorites.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 p-6 text-center">
       <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center">
@@ -145,6 +177,12 @@ export default function SwipePage() {
     queryKey: ["/api/images/pending"],
   });
 
+  const { data: imageCount } = useQuery<ImageCount>({
+    queryKey: ["/api/images/count"],
+  });
+
+  const canGenerate = imageCount?.canGenerate ?? true;
+
   useEffect(() => {
     const newImages = pendingImages.filter((img) => !seenIds.current.has(img.id));
     if (newImages.length > 0) {
@@ -161,6 +199,7 @@ export default function SwipePage() {
     onSuccess: () => {
       isGeneratingRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["/api/images/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/images/count"] });
     },
     onError: () => {
       isGeneratingRef.current = false;
@@ -179,11 +218,11 @@ export default function SwipePage() {
   });
 
   useEffect(() => {
-    if (queue.length <= 1 && !isGeneratingRef.current && !generateMutation.isPending && !isLoading) {
+    if (queue.length <= 1 && canGenerate && !isGeneratingRef.current && !generateMutation.isPending && !isLoading) {
       isGeneratingRef.current = true;
       generateMutation.mutate();
     }
-  }, [queue.length, isLoading]);
+  }, [queue.length, isLoading, canGenerate]);
 
   const handleSwipe = useCallback(
     (direction: "left" | "right") => {
@@ -217,6 +256,8 @@ export default function SwipePage() {
       <EmptyState
         onGenerate={() => generateMutation.mutate()}
         isGenerating={generateMutation.isPending}
+        canGenerate={canGenerate}
+        imageCount={imageCount}
       />
     );
   }
@@ -273,31 +314,39 @@ export default function SwipePage() {
         </button>
       </div>
 
-      <Button
-        data-testid="button-generate-more"
-        variant="ghost"
-        size="sm"
-        onClick={() => {
-          if (!isGeneratingRef.current) {
-            isGeneratingRef.current = true;
-            generateMutation.mutate();
-          }
-        }}
-        disabled={generateMutation.isPending}
-        className="text-muted-foreground"
-      >
-        {generateMutation.isPending ? (
-          <>
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Generating...
-          </>
-        ) : (
-          <>
-            <Sparkles className="w-3 h-3" />
-            Generate more
-          </>
-        )}
-      </Button>
+      {canGenerate && (
+        <Button
+          data-testid="button-generate-more"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (!isGeneratingRef.current) {
+              isGeneratingRef.current = true;
+              generateMutation.mutate();
+            }
+          }}
+          disabled={generateMutation.isPending}
+          className="text-muted-foreground"
+        >
+          {generateMutation.isPending ? (
+            <>
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-3 h-3" />
+              Generate more ({imageCount?.count ?? 0}/{imageCount?.limit ?? 50})
+            </>
+          )}
+        </Button>
+      )}
+
+      {!canGenerate && queue.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Generation limit reached ({imageCount?.limit ?? 50} images)
+        </p>
+      )}
     </div>
   );
 }
